@@ -18,6 +18,27 @@ import prepare_release
 import publish_release
 
 
+class TestMaintainerAuthorization(unittest.TestCase):
+    @patch("common.run")
+    def test_admin_and_maintain_can_release(self, run):
+        for permission in ("admin", "maintain"):
+            with self.subTest(permission=permission):
+                run.return_value = MagicMock(stdout=f"{permission}\n")
+                common.require_maintainer("maintainer", "connectbot/cbssh")
+                run.assert_called_with([
+                    "gh", "api", "repos/connectbot/cbssh/collaborators/maintainer/permission",
+                    "--jq", ".permission",
+                ])
+
+    @patch("common.run")
+    def test_lesser_or_unknown_permissions_cannot_release(self, run):
+        for permission in ("write", "triage", "read", "none", "", "unknown"):
+            with self.subTest(permission=permission):
+                run.return_value = MagicMock(stdout=f"{permission}\n")
+                with self.assertRaisesRegex(PermissionError, "maintain/admin access"):
+                    common.require_maintainer("contributor", "connectbot/cbssh")
+
+
 class TestPrepareGuidance(unittest.TestCase):
     @patch("prepare_release.run")
     def test_new_pr_is_draft_and_explains_approval_without_merging(self, run):

@@ -4,7 +4,8 @@ Issue-driven releases for Gradle projects. Prepares a release PR, then tags the 
 
 ## Set up your repository
 
-- Install a GitHub App with **Contents**, **Pull requests**, and **Issues** read/write access, plus **Checks** and **Commit statuses** read access to your repository. Add its ID and private key as Actions secrets named `RELEASE_APP_ID` and `RELEASE_APP_PRIVATE_KEY`. Organization secrets also work if the repository has access.
+- Install the release GitHub App with access to your repository and the organization's `.github` policy repository. Configure an [Octo STS](https://github.com/octo-sts/app) broker with the app's ID and private key, then add its hostname as an organization Actions variable named `OCTO_STS_DOMAIN` (for example, `octo-sts.example.com`). The private key stays only in the broker.
+- In the `.github` policy repository, add Octo STS policies named `<repository>-release-prepare`, `<repository>-release-publish`, and `<repository>-release-branch`. Restrict them to the calling repository and the corresponding reusable workflow, and grant only the permissions listed below.
 - Configure branch protection or rulesets to require PR approval and at least one CI check. Allow the release app to push to the target branch and create release tags.
 - Copy [release.yml](.github/ISSUE_TEMPLATE/release.yml) into your repository's `.github/ISSUE_TEMPLATE/` directory. Keep the field labels unchanged; the action uses them to read release inputs.
 - Create the labels `release:prepare` and `release:publish`. For maintenance branches, also copy [release-branch.yml](.github/ISSUE_TEMPLATE/release-branch.yml) and create `release:branch`.
@@ -44,6 +45,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
   issues: write
 
 jobs:
@@ -52,23 +54,30 @@ jobs:
     uses: connectbot/release-action/.github/workflows/prepare-release.yml@main
     with:
       tag_prefix: "v"
-    secrets: inherit
 
   publish:
     if: github.event.label.name == 'release:publish'
     uses: connectbot/release-action/.github/workflows/publish-release.yml@main
     with:
       tag_prefix: "v"
-    secrets: inherit
 
   # Optional: create maintenance branches using the Release branch issue form.
   branch:
     if: github.event.label.name == 'release:branch'
     uses: connectbot/release-action/.github/workflows/release-branch.yml@main
-    secrets: inherit
 ```
 
 Set `tag_prefix` to `""` in both jobs for unprefixed tags, and match it in Gradle's `tagTemplate`. The prepare workflow also accepts `java_version` (default `"17"`), `java_distribution` (default `"zulu"`), and `gradle_no_push_prop` (default `"release.noPush"`).
+
+The Octo STS policies must issue tokens for only the target repository with these permissions:
+
+| Identity | Permissions |
+| --- | --- |
+| `<repository>-release-prepare` | `contents: write`, `pull_requests: write`, `issues: write` |
+| `<repository>-release-publish` | `contents: write`, `pull_requests: read`, `checks: read`, `statuses: read`, `issues: write` |
+| `<repository>-release-branch` | `contents: write`, `issues: write` |
+
+Each policy should exactly match the caller's OIDC subject and `audience: <OCTO_STS_DOMAIN>`, and constrain `job_workflow_ref` to its matching workflow in `connectbot/release-action`. Put `repositories: [OWNER/REPOSITORY]` in every policy. Also restrict organization issuers to `https://token.actions.githubusercontent.com` in `.github/chainguard/trusted-token-issuers.yaml`.
 
 ## Hook up artifact publishing
 
@@ -105,16 +114,16 @@ gh workflow list --repo "$release_repo" --all
 gh workflow view release.yml --repo "$release_repo" --yaml
 ```
 
-Expect issues enabled, `permissions.push: true`, the release labels, and an active release workflow. Its YAML should contain the `issues: labeled` trigger, `contents: read` and `issues: write` permissions, and `secrets: inherit`, as above.
+Expect issues enabled, `permissions.push: true`, the release labels, and an active release workflow. Its YAML should contain the `issues: labeled` trigger and `contents: read`, `id-token: write`, and `issues: write` permissions, as above.
 
-Check repository secrets and, for organization-owned repositories, [organization secrets shared with this repository](https://docs.github.com/en/rest/actions/secrets#list-repository-organization-secrets):
+Check repository variables and, for organization-owned repositories, [organization variables shared with this repository](https://docs.github.com/en/rest/actions/variables#list-repository-organization-variables):
 
 ```bash
-gh secret list --repo "$release_repo"
-gh api "repos/$release_repo/actions/organization-secrets" --paginate --jq '.secrets[].name'
+gh variable list --repo "$release_repo"
+gh api "repos/$release_repo/actions/organization-variables" --paginate --jq '.variables[].name'
 ```
 
-Both `RELEASE_APP_ID` and `RELEASE_APP_PRIVATE_KEY` must appear across these lists. This verifies their presence, not their values or the app's installation and permissions.
+`OCTO_STS_DOMAIN` must appear across these lists. This verifies its presence, not broker reachability, the trust policies, or the app's installation and permissions.
 
 Check the target branch's rulesets and classic branch protection (shown for `main`):
 
@@ -143,6 +152,6 @@ Expect `OPEN`, `isDraft: true`, `APPROVED`, `MERGEABLE`, and at least one requir
 3. Submit an **Approve** review and wait for all required checks to pass. Leave the PR open and in draft; do not merge it or mark it ready for review.
 4. Add `release:publish` to the issue. The action tags the release commit and fast-forwards the target branch to the next development version. Your tag-triggered CI publishes the artifacts.
 
-The person applying a release label must have write, maintain, or admin access. To create a maintenance branch, open a **Release branch** issue and add `release:branch`.
+The person applying a release label must have maintain or admin access. To create a maintenance branch, open a **Release branch** issue and add `release:branch`.
 
 Draft PRs disable GitHub's merge button but still allow reviews. Someone with write access can mark them ready, so this is an accidental-merge guard, not an access restriction. If publishing fails before pushing the tag, resolve the reported blockers and use **Re-run failed jobs**, or remove and reapply `release:publish`.
