@@ -1,0 +1,66 @@
+name: "Create Release Branch"
+description: "Creates a release maintenance branch (e.g. release/1.1) from an authorized source ref."
+
+inputs:
+  maintenance_branch:
+    description: "Maintenance branch name (e.g. release/1.1). Defaults to extracting from ISSUE_BODY."
+    required: false
+    default: ""
+  source_branch:
+    description: "Source branch name (e.g. main). Defaults to extracting from ISSUE_BODY."
+    required: false
+    default: ""
+  source_ref:
+    description: "Source git ref (e.g. origin/main or a commit/tag). Defaults to extracting from ISSUE_BODY."
+    required: false
+    default: ""
+  push_token:
+    description: "GitHub token or App token with write permissions to push branches."
+    required: true
+  gh_token:
+    description: "GitHub token for gh CLI operations."
+    required: false
+    default: "${{ github.token }}"
+
+outputs:
+  maintenance_branch:
+    description: "Maintenance branch created"
+    value: ${{ steps.branch.outputs.maintenance_branch }}
+  source_ref:
+    description: "Source git ref used"
+    value: ${{ steps.branch.outputs.source_ref }}
+  commit_sha:
+    description: "Commit SHA of the new branch"
+    value: ${{ steps.branch.outputs.commit_sha }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create release branch
+      id: branch
+      shell: bash
+      env:
+        PYTHONPATH: "${{ github.action_path }}/../scripts"
+        PUSH_TOKEN: "${{ inputs.push_token }}"
+        GH_TOKEN: "${{ inputs.gh_token }}"
+        MAINTENANCE_BRANCH: "${{ inputs.maintenance_branch }}"
+        SOURCE_BRANCH: "${{ inputs.source_branch }}"
+        SOURCE_REF: "${{ inputs.source_ref }}"
+      run: |
+        set -o pipefail
+        args=()
+        if [[ -n "$MAINTENANCE_BRANCH" ]]; then args+=(--maintenance-branch "$MAINTENANCE_BRANCH"); fi
+        if [[ -n "$SOURCE_BRANCH" ]]; then args+=(--source-branch "$SOURCE_BRANCH"); fi
+        if [[ -n "$SOURCE_REF" ]]; then args+=(--source-ref "$SOURCE_REF"); fi
+        python3 "$GITHUB_ACTION_PATH/../scripts/create_release_branch.py" "${args[@]}" \
+          2>&1 | tee "$RUNNER_TEMP/release-branch.log"
+
+    - name: Comment on failure
+      if: failure() && steps.branch.outcome == 'failure'
+      shell: bash
+      env:
+        PUSH_TOKEN: "${{ inputs.push_token }}"
+        GH_TOKEN: "${{ inputs.gh_token }}"
+      run: |
+        python3 "$GITHUB_ACTION_PATH/../scripts/comment_issue_failure.py" \
+          "$RUNNER_TEMP/release-branch.log" "Create release branch"

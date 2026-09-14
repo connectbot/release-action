@@ -1,0 +1,54 @@
+name: Create release branch
+on:
+  workflow_call:
+    secrets:
+      RELEASE_APP_ID:
+        required: true
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  branch:
+    name: Create maintenance branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      RELEASE_ACTOR: ${{ github.event.sender.login }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Create release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+
+      - name: Create branch
+        id: branch
+        uses: connectbot/release-action/branch@main
+        with:
+          push_token: ${{ steps.release-app-token.outputs.token }}
+          gh_token: ${{ steps.release-app-token.outputs.token }}
+
+      - name: Comment on setup failure
+        if: failure() && steps.branch.outcome != 'failure'
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Create release branch setup failed. Open $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID, fix the failed setup step, then use Re-run failed jobs."

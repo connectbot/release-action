@@ -1,0 +1,72 @@
+name: "Publish Release"
+description: "Verifies approved release PR, checks CI statuses, tags release commit, and fast-forwards target branch."
+
+inputs:
+  release_version:
+    description: "Version to release (e.g. 1.2.3). Defaults to extracting from ISSUE_BODY."
+    required: false
+    default: ""
+  next_version:
+    description: "Next development version (e.g. 1.2.4-SNAPSHOT). Defaults to extracting from ISSUE_BODY."
+    required: false
+    default: ""
+  target_branch:
+    description: "Target branch to publish to (e.g. main)."
+    required: false
+    default: ""
+  tag_prefix:
+    description: "Prefix for git tags ('v' for v1.2.3, '' for 1.2.3)."
+    required: false
+    default: "v"
+  push_token:
+    description: "GitHub token or App token with write permissions to push branches and tags."
+    required: true
+  gh_token:
+    description: "GitHub token for gh CLI operations."
+    required: false
+    default: "${{ github.token }}"
+
+outputs:
+  tag_name:
+    description: "Tag name created and pushed"
+    value: ${{ steps.publish.outputs.tag_name }}
+  release_commit:
+    description: "Git commit SHA of the release"
+    value: ${{ steps.publish.outputs.release_commit }}
+  target_branch:
+    description: "Target branch fast-forwarded"
+    value: ${{ steps.publish.outputs.target_branch }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Publish release
+      id: publish
+      shell: bash
+      env:
+        PYTHONPATH: "${{ github.action_path }}/../scripts"
+        PUSH_TOKEN: "${{ inputs.push_token }}"
+        GH_TOKEN: "${{ inputs.gh_token }}"
+        TAG_PREFIX: "${{ inputs.tag_prefix }}"
+        RELEASE_VERSION: "${{ inputs.release_version }}"
+        NEXT_VERSION: "${{ inputs.next_version }}"
+        TARGET_BRANCH: "${{ inputs.target_branch }}"
+      run: |
+        set -o pipefail
+        args=()
+        if [[ -n "$RELEASE_VERSION" ]]; then args+=(--release-version "$RELEASE_VERSION"); fi
+        if [[ -n "$NEXT_VERSION" ]]; then args+=(--next-version "$NEXT_VERSION"); fi
+        if [[ -n "$TARGET_BRANCH" ]]; then args+=(--target-branch "$TARGET_BRANCH"); fi
+        args+=(--tag-prefix "$TAG_PREFIX")
+        python3 "$GITHUB_ACTION_PATH/../scripts/publish_release.py" "${args[@]}" \
+          2>&1 | tee "$RUNNER_TEMP/release-publish.log"
+
+    - name: Comment on failure
+      if: failure() && steps.publish.outcome == 'failure'
+      shell: bash
+      env:
+        PUSH_TOKEN: "${{ inputs.push_token }}"
+        GH_TOKEN: "${{ inputs.gh_token }}"
+      run: |
+        python3 "$GITHUB_ACTION_PATH/../scripts/comment_issue_failure.py" \
+          "$RUNNER_TEMP/release-publish.log" "Publish release"

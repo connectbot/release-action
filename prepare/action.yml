@@ -1,0 +1,87 @@
+name: "Prepare Release"
+description: "Prepares a release branch using gradle release and opens/updates a release pull request."
+
+inputs:
+  release_version:
+    description: "Version to release (e.g. 1.2.3). Defaults to extracting from ISSUE_BODY."
+    required: false
+    default: ""
+  next_version:
+    description: "Next development version (e.g. 1.2.4-SNAPSHOT). Defaults to extracting from ISSUE_BODY."
+    required: false
+    default: ""
+  target_branch:
+    description: "Target branch to release from (e.g. main)."
+    required: false
+    default: ""
+  tag_prefix:
+    description: "Prefix for git tags ('v' for v1.2.3, '' for 1.2.3)."
+    required: false
+    default: "v"
+  gradle_no_push_prop:
+    description: "Gradle property name that suppresses git pushing."
+    required: false
+    default: "release.noPush"
+  push_token:
+    description: "GitHub token or App token with write permissions to push branches."
+    required: true
+  gh_token:
+    description: "GitHub token for gh CLI operations."
+    required: false
+    default: "${{ github.token }}"
+
+outputs:
+  release_version:
+    description: "Release version"
+    value: ${{ steps.prepare.outputs.release_version }}
+  next_version:
+    description: "Next version"
+    value: ${{ steps.prepare.outputs.next_version }}
+  target_branch:
+    description: "Target branch"
+    value: ${{ steps.prepare.outputs.target_branch }}
+  work_branch:
+    description: "Work branch"
+    value: ${{ steps.prepare.outputs.work_branch }}
+  tag_name:
+    description: "Tag name"
+    value: ${{ steps.prepare.outputs.tag_name }}
+  pr_number:
+    description: "Release PR number"
+    value: ${{ steps.prepare.outputs.pr_number }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare release
+      id: prepare
+      shell: bash
+      env:
+        PYTHONPATH: "${{ github.action_path }}/../scripts"
+        PUSH_TOKEN: "${{ inputs.push_token }}"
+        GH_TOKEN: "${{ inputs.gh_token }}"
+        TAG_PREFIX: "${{ inputs.tag_prefix }}"
+        GRADLE_NO_PUSH_PROP: "${{ inputs.gradle_no_push_prop }}"
+        RELEASE_VERSION: "${{ inputs.release_version }}"
+        NEXT_VERSION: "${{ inputs.next_version }}"
+        TARGET_BRANCH: "${{ inputs.target_branch }}"
+      run: |
+        set -o pipefail
+        args=()
+        if [[ -n "$RELEASE_VERSION" ]]; then args+=(--release-version "$RELEASE_VERSION"); fi
+        if [[ -n "$NEXT_VERSION" ]]; then args+=(--next-version "$NEXT_VERSION"); fi
+        if [[ -n "$TARGET_BRANCH" ]]; then args+=(--target-branch "$TARGET_BRANCH"); fi
+        args+=(--tag-prefix "$TAG_PREFIX")
+        args+=(--gradle-no-push-prop "$GRADLE_NO_PUSH_PROP")
+        python3 "$GITHUB_ACTION_PATH/../scripts/prepare_release.py" "${args[@]}" \
+          2>&1 | tee "$RUNNER_TEMP/release-prepare.log"
+
+    - name: Comment on failure
+      if: failure() && steps.prepare.outcome == 'failure'
+      shell: bash
+      env:
+        PUSH_TOKEN: "${{ inputs.push_token }}"
+        GH_TOKEN: "${{ inputs.gh_token }}"
+      run: |
+        python3 "$GITHUB_ACTION_PATH/../scripts/comment_issue_failure.py" \
+          "$RUNNER_TEMP/release-prepare.log" "Prepare release"

@@ -1,0 +1,85 @@
+name: Prepare release
+on:
+  workflow_call:
+    inputs:
+      tag_prefix:
+        description: "Prefix for git tags ('v' for v1.2.3, '' for 1.2.3)"
+        type: string
+        default: "v"
+      gradle_no_push_prop:
+        description: "Gradle property name that suppresses git pushing"
+        type: string
+        default: "release.noPush"
+      java_version:
+        description: "JDK version to set up"
+        type: string
+        default: "17"
+      java_distribution:
+        description: "JDK distribution"
+        type: string
+        default: "zulu"
+    secrets:
+      RELEASE_APP_ID:
+        required: true
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  prepare:
+    name: Prepare release pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      RELEASE_ACTOR: ${{ github.event.sender.login }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: ${{ inputs.java_distribution }}
+          java-version: ${{ inputs.java_version }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          validate-wrappers: true
+
+      - name: Create release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Prepare release
+        id: release
+        uses: connectbot/release-action/prepare@main
+        with:
+          tag_prefix: ${{ inputs.tag_prefix }}
+          gradle_no_push_prop: ${{ inputs.gradle_no_push_prop }}
+          push_token: ${{ steps.release-app-token.outputs.token }}
+          gh_token: ${{ steps.release-app-token.outputs.token }}
+
+      - name: Comment on setup failure
+        if: failure() && steps.release.outcome != 'failure'
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Prepare release setup failed. Open $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID, fix the failed setup step, then use Re-run failed jobs."
