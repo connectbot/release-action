@@ -143,6 +143,6 @@ Expect `OPEN`, `isDraft: true`, `APPROVED`, `MERGEABLE`, and at least one requir
 3. Submit an **Approve** review and wait for all required checks to pass. Leave the PR open and in draft; do not merge it or mark it ready for review.
 4. Add `release:publish` to the issue. The action tags the release commit and fast-forwards the target branch to the next development version. Your tag-triggered CI publishes the artifacts.
 
-The person applying a release label must have write, maintain, or admin access. To create a maintenance branch, open a **Release branch** issue and add `release:branch`.
+The person applying a release label must have maintain or admin access. To create a maintenance branch, open a **Release branch** issue and add `release:branch`.
 
 Draft PRs disable GitHub's merge button but still allow reviews. Someone with write access can mark them ready, so this is an accidental-merge guard, not an access restriction. If publishing fails before pushing the tag, resolve the reported blockers and use **Re-run failed jobs**, or remove and reapply `release:publish`.
