@@ -3,5 +3,13 @@
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigestsToSemver"
+  ],
+  "packageRules": [
+    {
+      "description": "Keep this repository's own actions tracking their branch",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["connectbot/release-action"],
+      "pinDigests": false
+    }
   ]
 }
