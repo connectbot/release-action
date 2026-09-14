@@ -88,7 +88,7 @@ def validate_maintenance_branch(branch: str) -> None:
 
 
 def require_maintainer(actor: Optional[str] = None, repo: Optional[str] = None) -> None:
-    """Verify that the triggering actor has write/maintain/admin permission on the repo."""
+    """Verify that the triggering actor has maintain/admin permission on the repo."""
     actor = actor or os.environ.get("RELEASE_ACTOR")
     repo = repo or os.environ.get("GITHUB_REPOSITORY")
     if not actor:
@@ -98,7 +98,7 @@ def require_maintainer(actor: Optional[str] = None, repo: Optional[str] = None) 
 
     res = run(["gh", "api", f"repos/{repo}/collaborators/{actor}/permission", "--jq", ".permission"])
     permission = res.stdout.strip()
-    if permission not in ("admin", "maintain", "write"):
+    if permission not in ("admin", "maintain"):
         raise PermissionError(
             f"Release automation must be started by a maintainer with maintain/admin access. "
             f"'{actor}' has '{permission}' permission on '{repo}'."
