@@ -35,7 +35,7 @@ jobs:
 
       - name: Create branch
         id: branch
-        uses: connectbot/release-action/branch@main
+        uses: $/branch
         with:
           push_token: ${{ steps.release-app-token.outputs.token }}
           gh_token: ${{ steps.release-app-token.outputs.token }}

@@ -39,7 +39,7 @@ jobs:
 
       - name: Publish release
         id: publish
-        uses: connectbot/release-action/publish@main
+        uses: $/publish
         with:
           tag_prefix: ${{ inputs.tag_prefix }}
           push_token: ${{ steps.release-app-token.outputs.token }}

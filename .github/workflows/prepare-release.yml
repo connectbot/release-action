@@ -62,7 +62,7 @@ jobs:
 
       - name: Prepare release
         id: release
-        uses: connectbot/release-action/prepare@main
+        uses: $/prepare
         with:
           tag_prefix: ${{ inputs.tag_prefix }}
           gradle_no_push_prop: ${{ inputs.gradle_no_push_prop }}
