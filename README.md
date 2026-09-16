@@ -77,7 +77,7 @@ The Octo STS policies must issue tokens for only the target repository with thes
 | `<repository>-release-publish` | `contents: write`, `pull_requests: read`, `checks: read`, `statuses: read`, `issues: write` |
 | `<repository>-release-branch` | `contents: write`, `issues: write` |
 
-Each policy should exactly match the caller's OIDC subject and `audience: <OCTO_STS_DOMAIN>`, and constrain `job_workflow_ref` to its matching workflow in `connectbot/release-action`. Put `repositories: [OWNER/REPOSITORY]` in every policy. Also restrict organization issuers to `https://token.actions.githubusercontent.com` in `.github/chainguard/trusted-token-issuers.yaml`.
+Each policy should exactly match the caller's OIDC subject and `audience: <OCTO_STS_DOMAIN>`, and constrain `job_workflow_ref` to its matching workflow in `connectbot/release-action`. Put `repositories: [REPOSITORY]` in every policy. Also restrict organization issuers to `https://token.actions.githubusercontent.com` in `.github/chainguard/trusted-token-issuers.yaml`.
 
 ## Hook up artifact publishing
 
