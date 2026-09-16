@@ -73,18 +73,37 @@ class TestPublishReadiness(unittest.TestCase):
     def setUp(self):
         self.pr = {
             "isDraft": True,
-            "reviewDecision": "APPROVED",
+            "headRefOid": "reviewed-sha",
             "mergeable": "MERGEABLE",
             "mergeStateStatus": "DRAFT",
         }
+        self.reviews = [{
+            "id": 1,
+            "state": "APPROVED",
+            "commit_id": "reviewed-sha",
+            "submitted_at": "2026-09-16T01:00:00Z",
+            "user": {"login": "reviewer"},
+        }]
         self.checks = [{"name": "test", "workflow": "CI", "bucket": "pass", "state": "SUCCESS"}]
 
-    def validate(self, checks=None, returncode=0, **changes):
+    def validate(self, checks=None, returncode=0, reviews=None, permission="maintain", **changes):
         pr = {**self.pr, **changes}
-        with patch("publish_release.run", return_value=MagicMock(
-            stdout=json.dumps(self.checks if checks is None else checks),
-            stderr="", returncode=returncode,
-        )):
+
+        def run_command(command, **_kwargs):
+            if command[:4] == ["gh", "api", "--paginate", "--slurp"]:
+                return MagicMock(
+                    stdout=json.dumps([self.reviews if reviews is None else reviews]),
+                    stderr="", returncode=0,
+                )
+            if command[:2] == ["gh", "api"]:
+                return MagicMock(stdout=f"{permission}\n", stderr="", returncode=0)
+            return MagicMock(
+                stdout=json.dumps(self.checks if checks is None else checks),
+                stderr="", returncode=returncode,
+            )
+
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "connectbot/cbssh"}), \
+                patch("publish_release.run", side_effect=run_command):
             publish_release.require_publish_ready("261", pr)
 
     def test_approved_draft_with_passing_required_checks_can_publish(self):
@@ -95,18 +114,58 @@ class TestPublishReadiness(unittest.TestCase):
 
     def test_missing_approval_explained_before_generic_blocked_state(self):
         with self.assertRaises(RuntimeError) as error:
-            self.validate(reviewDecision="", mergeStateStatus="BLOCKED")
-        self.assertIn("Approve review", str(error.exception))
+            self.validate(reviews=[], mergeStateStatus="BLOCKED")
+        self.assertIn("Approve review for its current head commit", str(error.exception))
         self.assertIn("do not merge", str(error.exception))
         self.assertNotIn("merge state BLOCKED", str(error.exception))
+
+    def test_approval_for_previous_head_does_not_count(self):
+        with self.assertRaisesRegex(RuntimeError, "current head commit"):
+            self.validate(reviews=[{**self.reviews[0], "commit_id": "stale-sha"}])
+
+    def test_later_request_changes_supersedes_approval(self):
+        reviews = [
+            self.reviews[0],
+            {**self.reviews[0], "id": 2, "state": "CHANGES_REQUESTED"},
+        ]
+        with self.assertRaisesRegex(RuntimeError, "current head commit"):
+            self.validate(reviews=reviews)
+
+    def test_later_approval_supersedes_request_changes(self):
+        reviews = [
+            {**self.reviews[0], "state": "CHANGES_REQUESTED"},
+            {**self.reviews[0], "id": 2, "state": "APPROVED"},
+        ]
+        self.validate(reviews=reviews)
+
+    def test_comment_does_not_supersede_approval(self):
+        reviews = [
+            self.reviews[0],
+            {**self.reviews[0], "id": 2, "state": "COMMENTED"},
+        ]
+        self.validate(reviews=reviews)
+
+    def test_dismissed_approval_does_not_count(self):
+        with self.assertRaisesRegex(RuntimeError, "current head commit"):
+            self.validate(reviews=[{**self.reviews[0], "state": "DISMISSED"}])
+
+    def test_approval_accepts_maintainer_permissions(self):
+        for permission in ("maintain", "admin"):
+            with self.subTest(permission=permission):
+                self.validate(permission=permission)
+
+    def test_approval_requires_maintainer_permission(self):
+        for permission in ("write", "triage", "read", "none"):
+            with self.subTest(permission=permission), self.assertRaisesRegex(RuntimeError, "maintain or admin"):
+                self.validate(permission=permission)
 
     def test_approval_and_pending_check_reported_together(self):
         with self.assertRaises(RuntimeError) as error:
             self.validate(
                 checks=[{**self.checks[0], "bucket": "pending", "state": "IN_PROGRESS"}],
-                returncode=8, reviewDecision="REVIEW_REQUIRED",
+                returncode=8, reviews=[],
             )
-        self.assertIn("Approve review", str(error.exception))
+        self.assertIn("Approve review for its current head commit", str(error.exception))
         self.assertIn("Wait for required check 'test'", str(error.exception))
 
     def test_failed_required_check_is_actionable_even_with_nonzero_cli_exit(self):
@@ -138,10 +197,35 @@ class TestPublishReadiness(unittest.TestCase):
             self.validate(isDraft=False)
 
     def test_api_failure_does_not_look_like_passing_checks(self):
-        with patch("publish_release.run", return_value=MagicMock(
-            stdout="", stderr="Resource not accessible by integration", returncode=1,
-        )):
+        def run_command(command, **_kwargs):
+            if command[:4] == ["gh", "api", "--paginate", "--slurp"]:
+                return MagicMock(stdout=json.dumps([self.reviews]), stderr="", returncode=0)
+            if command[:2] == ["gh", "api"]:
+                return MagicMock(stdout="maintain\n", stderr="", returncode=0)
+            return MagicMock(stdout="", stderr="Resource not accessible by integration", returncode=1)
+
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "connectbot/cbssh"}), \
+                patch("publish_release.run", side_effect=run_command):
             with self.assertRaisesRegex(RuntimeError, "Checks and Commit statuses read permissions"):
+                publish_release.require_publish_ready("261", self.pr)
+
+    def test_review_api_failure_does_not_look_like_missing_approval(self):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "connectbot/cbssh"}), \
+                patch("publish_release.run", side_effect=[
+                    MagicMock(stdout="", stderr="Resource not accessible by integration", returncode=1),
+                    MagicMock(stdout=json.dumps(self.checks), stderr="", returncode=0),
+                ]):
+            with self.assertRaisesRegex(RuntimeError, "Pull requests read permission"):
+                publish_release.require_publish_ready("261", self.pr)
+
+    def test_reviewer_permission_api_failure_is_reported(self):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "connectbot/cbssh"}), \
+                patch("publish_release.run", side_effect=[
+                    MagicMock(stdout=json.dumps([self.reviews]), stderr="", returncode=0),
+                    MagicMock(stdout="", stderr="Resource not accessible by integration", returncode=1),
+                    MagicMock(stdout=json.dumps(self.checks), stderr="", returncode=0),
+                ]):
+            with self.assertRaisesRegex(RuntimeError, "Metadata read permission"):
                 publish_release.require_publish_ready("261", self.pr)
 
     @patch("publish_release.append_github_output")
@@ -151,6 +235,7 @@ class TestPublishReadiness(unittest.TestCase):
     @patch("publish_release.require_maintainer")
     @patch("publish_release.parse_args")
     @patch("publish_release.run")
+    @patch.dict(os.environ, {"GITHUB_REPOSITORY": "connectbot/cbssh"})
     def test_head_change_after_review_prevents_tag_and_push(self, run, args, *_mocks):
         args.return_value = MagicMock(
             release_version="1.2.3", next_version="1.2.4-SNAPSHOT",
@@ -162,6 +247,8 @@ class TestPublishReadiness(unittest.TestCase):
                 **self.pr, "baseRefName": "main", "headRefName": "release-work/1.2.3",
                 "headRefOid": "reviewed-sha",
             })),
+            MagicMock(stdout=json.dumps([self.reviews]), returncode=0),
+            MagicMock(stdout="maintain\n", returncode=0),
             MagicMock(stdout=json.dumps(self.checks), returncode=0),
             MagicMock(),  # Fetch branches.
             MagicMock(stdout="changed-sha\n"),

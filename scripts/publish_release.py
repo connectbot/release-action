@@ -46,14 +46,68 @@ def find_release_commit(target_branch: str, work_branch: str, release_version: s
     raise RuntimeError(f"Could not find release commit with '{expected_line}' in branch {work_branch}")
 
 
+def require_head_approval(pr_number: str, head_oid: str) -> None:
+    """Require a current-head approval from a repository maintainer."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        raise RuntimeError("Release automation requires GITHUB_REPOSITORY to be set.")
+
+    result = run([
+        "gh", "api", "--paginate", "--slurp",
+        f"repos/{repo}/pulls/{pr_number}/reviews?per_page=100",
+    ], check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(
+            f"Could not read reviews for PR #{pr_number}. "
+            "Check the token's Pull requests read permission. "
+            f"{result.stderr.strip()}"
+        )
+
+    pages = json.loads(result.stdout)
+    reviews = [review for page in pages for review in page]
+    reviews.sort(key=lambda review: (review.get("submitted_at") or "", review.get("id") or 0))
+
+    # A later decision by the same reviewer supersedes their earlier decision.
+    # COMMENTED reviews do not change an approve/request-changes decision.
+    latest_decisions = {}
+    for review in reviews:
+        if review.get("commit_id") != head_oid:
+            continue
+        login = (review.get("user") or {}).get("login")
+        state = review.get("state")
+        if login and state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            latest_decisions[login] = state
+
+    approvers = [login for login, state in latest_decisions.items() if state == "APPROVED"]
+    for login in approvers:
+        permission_result = run([
+            "gh", "api", f"repos/{repo}/collaborators/{login}/permission",
+            "--jq", ".permission",
+        ], check=False)
+        if permission_result.returncode != 0 or not permission_result.stdout.strip():
+            raise RuntimeError(
+                f"Could not verify repository permission for reviewer '{login}'. "
+                "Check the token's Metadata read permission. "
+                f"{permission_result.stderr.strip()}"
+            )
+        if permission_result.stdout.strip() in ("admin", "maintain"):
+            return
+
+    raise RuntimeError(
+        f"Open PR #{pr_number} and submit an Approve review for its current head commit "
+        f"({head_oid[:12]}). The approval must come from someone with maintain or admin "
+        "access. Leave the PR open and in draft; do not merge it."
+    )
+
+
 def require_publish_ready(pr_number: str, pr_data: dict) -> None:
-    """Explain actionable blockers before GitHub's aggregate merge status."""
+    """Explain actionable blockers before GitHub's merge status."""
     blockers = []
-    if pr_data.get("reviewDecision") != "APPROVED":
+    try:
+        require_head_approval(pr_number, pr_data.get("headRefOid", ""))
+    except RuntimeError as error:
         blockers.append(
-            f"Open PR #{pr_number} and submit an Approve review "
-            "(Files changed → Review changes → Approve). Satisfy all required reviews "
-            "and resolve any requested changes. Leave the PR open and in draft; do not merge it."
+            str(error)
         )
 
     result = run([
@@ -145,7 +199,7 @@ def main():
     # 2. Verify PR state and approval
     pr_view_res = run([
         "gh", "pr", "view", pr_number,
-        "--json", "baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,isDraft",
+        "--json", "baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,isDraft",
     ])
     pr_data = json.loads(pr_view_res.stdout)
 

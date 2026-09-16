@@ -6,7 +6,7 @@ Issue-driven releases for Gradle projects. Prepares a release PR, then tags the 
 
 - Install the release GitHub App with access to your repository and the organization's `.github` policy repository. Configure an [Octo STS](https://github.com/octo-sts/app) broker with the app's ID and private key, then add its hostname as an organization Actions variable named `OCTO_STS_DOMAIN` (for example, `octo-sts.example.com`). The private key stays only in the broker.
 - In the `.github` policy repository, add Octo STS policies named `<repository>-release-prepare`, `<repository>-release-publish`, and `<repository>-release-branch`. Restrict them to the calling repository and the corresponding reusable workflow, and grant only the permissions listed below.
-- Configure branch protection or rulesets to require PR approval and at least one CI check. Allow the release app to push to the target branch and create release tags.
+- Configure branch protection or rulesets to require pull requests and at least one CI check. A repository-wide required approval is optional; the release action independently requires a current-head approval from a collaborator with maintain or admin access. Allow the release app to bypass the pull-request rule, push to the target branch, and create release tags.
 - Copy [release.yml](.github/ISSUE_TEMPLATE/release.yml) into your repository's `.github/ISSUE_TEMPLATE/` directory. Keep the field labels unchanged; the action uses them to read release inputs.
 - Create the labels `release:prepare` and `release:publish`. For maintenance branches, also copy [release-branch.yml](.github/ISSUE_TEMPLATE/release-branch.yml) and create `release:branch`.
 
@@ -132,18 +132,18 @@ gh ruleset check main --repo "$release_repo"
 gh api "repos/$release_repo/branches/main/protection"
 ```
 
-Expect required PR approval and at least one required status check. Inspect the applicable rules' bypass settings to ensure the release app can push directly; also check any tag rules. A `Branch not protected` response only means there is no classic protection—rulesets may still apply. Other access errors need resolving before you can assess the setup.
+Expect a pull-request rule and at least one required status check. The required approval count may be zero, which is useful for single-maintainer repositories. Inspect the applicable rules' bypass settings to ensure the release app can push directly; also check any tag rules. A `Branch not protected` response only means there is no classic protection—rulesets may still apply. Other access errors need resolving before you can assess the setup.
 
 Once preparation creates a release PR, check it before adding `release:publish`:
 
 ```bash
 release_pr=123 # Replace with the release PR number.
 gh pr view "$release_pr" --repo "$release_repo" \
-  --json url,state,isDraft,reviewDecision,mergeable,mergeStateStatus
+  --json url,state,isDraft,headRefOid,reviews,mergeable,mergeStateStatus
 gh pr checks "$release_pr" --repo "$release_repo" --required
 ```
 
-Expect `OPEN`, `isDraft: true`, `APPROVED`, `MERGEABLE`, and at least one required check, all passing. `DRAFT` is an expected merge state. These checks use your credentials; they cannot prove the release app can push or that artifact publishing will succeed. There is no dry-run release mode.
+Expect `OPEN`, `isDraft: true`, `MERGEABLE`, an `APPROVED` review on the current `headRefOid` from a collaborator with maintain or admin access, and at least one required check, all passing. `DRAFT` is an expected merge state. These checks use your credentials; they cannot prove the release app can push or that artifact publishing will succeed. There is no dry-run release mode.
 
 ## Make a release
 
